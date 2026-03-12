@@ -1,0 +1,217 @@
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Navigate } from 'react-router-dom';
+import { Users, Package, Truck, Copy, Calendar, CheckSquare, Square, ChevronDown, ChevronUp } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { dashboardApi } from '../api/dashboard';
+import { suppliersApi } from '../api/suppliers';
+import { useAuthStore } from '../store/authStore';
+import ExpiryBadge from '../components/shared/ExpiryBadge';
+import EmptyState from '../components/shared/EmptyState';
+import { formatExpiryDate } from '../utils/expiry';
+
+function OverviewCard({ label, value, Icon, colorClass }) {
+  return (
+    <div className="card p-5 flex items-center gap-4">
+      <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${colorClass}`}>
+        <Icon size={20} className="text-white" />
+      </div>
+      <div>
+        <p className="text-xs text-gray-500 mb-0.5">{label}</p>
+        <p className="text-2xl font-bold text-gray-900">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+export default function DistributorDashboard() {
+  const { user } = useAuthStore();
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState(new Set());
+  const [pickupDate, setPickupDate] = useState('');
+  const [retailersOpen, setRetailersOpen] = useState(true);
+
+  // Redirect non-distributors
+  if (user?.role !== 'distributor') return <Navigate to="/" replace />;
+
+  const { data: distData, isLoading } = useQuery({
+    queryKey: ['dashboard-distributor'],
+    queryFn: dashboardApi.getDistributor,
+    refetchInterval: 60_000,
+  });
+
+  const { data: retailers = [] } = useQuery({
+    queryKey: ['retailers'],
+    queryFn: suppliersApi.getRetailers,
+  });
+
+  const pickupMutation = useMutation({
+    mutationFn: () => suppliersApi.bulkPickup([...selected], pickupDate),
+    onSuccess: (data) => {
+      toast.success(`Pickup scheduled. ${data.notified_retailers} retailer${data.notified_retailers !== 1 ? 's' : ''} notified.`);
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ['dashboard-distributor'] });
+    },
+    onError: () => toast.error('Pickup scheduling failed'),
+  });
+
+  const atRiskBatches = distData?.at_risk_batches ?? [];
+  const pendingPickups = atRiskBatches.filter((b) => b.status === 'pickup_scheduled').length;
+
+  const toggleRow = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selected.size === atRiskBatches.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(atRiskBatches.map((b) => b.id)));
+    }
+  };
+
+  const inviteUrl = `${window.location.origin}/invite/${user?.id}`;
+  const copyInvite = () => { navigator.clipboard.writeText(inviteUrl); toast.success('Invite link copied!'); };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-bold text-gray-900">Distributor Network</h1>
+        <p className="text-sm text-gray-500">Manage your linked retailers and schedule pickups</p>
+      </div>
+
+      {/* Overview cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <OverviewCard label="Linked retailers"    value={retailers.length}                  Icon={Users}   colorClass="bg-primary-500" />
+        <OverviewCard label="At-risk batches"     value={atRiskBatches.length}             Icon={Package} colorClass="bg-orange-500" />
+        <OverviewCard label="Pickup scheduled"    value={pendingPickups}                   Icon={Truck}   colorClass="bg-purple-500" />
+      </div>
+
+      {/* Invite link */}
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-gray-700 mb-1">Connect your retailers</h2>
+        <p className="text-xs text-gray-400 mb-3">Share this link — retailers who join via it are automatically linked to your account.</p>
+        <div className="flex gap-2">
+          <input readOnly value={inviteUrl} className="input flex-1 bg-gray-50 font-mono text-xs" />
+          <button onClick={copyInvite} className="btn-secondary flex items-center gap-1.5 flex-shrink-0">
+            <Copy size={14} /> Copy
+          </button>
+        </div>
+      </div>
+
+      {/* At-risk batch table */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-gray-700">At-risk batches</h2>
+          <span className="text-xs text-gray-400">{atRiskBatches.length} batch{atRiskBatches.length !== 1 ? 'es' : ''} across all retailers</span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="px-4 py-3">
+                  <button onClick={toggleAll} className="text-gray-400 hover:text-gray-700">
+                    {selected.size === atRiskBatches.length && atRiskBatches.length > 0
+                      ? <CheckSquare size={15} /> : <Square size={15} />}
+                  </button>
+                </th>
+                {['Retailer', 'Shop', 'Product', 'Batch', 'Expiry', 'Qty', 'Days Left'].map((h) => (
+                  <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading && (
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-400">Loading…</td></tr>
+              )}
+              {!isLoading && atRiskBatches.length === 0 && (
+                <tr><td colSpan={8}>
+                  <EmptyState title="No at-risk batches" description="All linked retailers have everything under control!" icon={Package} />
+                </td></tr>
+              )}
+              {atRiskBatches.map((batch) => (
+                <tr key={batch.id} className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors ${selected.has(batch.id) ? 'bg-primary-50' : ''}`}>
+                  <td className="px-4 py-3">
+                    <button onClick={() => toggleRow(batch.id)} className={`${selected.has(batch.id) ? 'text-primary-600' : 'text-gray-300'} hover:text-primary-500`}>
+                      {selected.has(batch.id) ? <CheckSquare size={15} /> : <Square size={15} />}
+                    </button>
+                  </td>
+                  <td className="px-3 py-3 font-medium text-gray-900 text-xs max-w-[100px] truncate">{batch.owner_name ?? '—'}</td>
+                  <td className="px-3 py-3 text-gray-500 text-xs max-w-[100px] truncate">{batch.shop_name ?? '—'}</td>
+                  <td className="px-3 py-3 font-medium text-gray-900 text-xs max-w-[120px] truncate">{batch.product_name}</td>
+                  <td className="px-3 py-3 text-gray-500 font-mono text-xs">{batch.batch_number ?? '—'}</td>
+                  <td className="px-3 py-3 text-gray-500 text-xs whitespace-nowrap">{formatExpiryDate(batch.expiry_date)}</td>
+                  <td className="px-3 py-3 text-gray-600 text-xs">{batch.quantity}</td>
+                  <td className="px-3 py-3">
+                    <ExpiryBadge days={batch.days_to_expiry ?? 0} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Bulk pickup bar */}
+        {selected.size > 0 && (
+          <div className="px-5 py-3 bg-primary-50 border-t border-primary-100 flex flex-wrap items-center gap-3">
+            <span className="text-sm font-semibold text-primary-700">{selected.size} batch{selected.size !== 1 ? 'es' : ''} selected</span>
+            <div className="flex items-center gap-2 flex-1 min-w-40">
+              <Calendar size={14} className="text-gray-400 flex-shrink-0" />
+              <input
+                type="date"
+                className="input py-1 text-sm"
+                value={pickupDate}
+                min={new Date().toISOString().split('T')[0]}
+                onChange={(e) => setPickupDate(e.target.value)}
+              />
+            </div>
+            <button
+              onClick={() => pickupMutation.mutate()}
+              disabled={!pickupDate || pickupMutation.isPending}
+              className="btn-primary flex-shrink-0 disabled:opacity-50"
+            >
+              {pickupMutation.isPending ? 'Scheduling…' : 'Schedule Pickup & Notify Retailers'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Retailer list (collapsible) */}
+      <div className="card overflow-hidden">
+        <button
+          onClick={() => setRetailersOpen(!retailersOpen)}
+          className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+        >
+          <h2 className="text-sm font-semibold text-gray-700">Linked retailers ({retailers.length})</h2>
+          {retailersOpen ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+        </button>
+
+        {retailersOpen && (
+          <div className="border-t border-gray-100 divide-y divide-gray-100">
+            {retailers.length === 0 ? (
+              <div className="px-5 py-6 text-sm text-gray-400 text-center">No retailers linked yet. Share your invite link!</div>
+            ) : retailers.map((r) => (
+              <div key={r.id} className="px-5 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{r.shop_name}</p>
+                  <p className="text-xs text-gray-500">{r.name} · {r.phone ?? '—'}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs bg-orange-100 text-orange-600 font-medium px-2 py-0.5 rounded-full">
+                    {atRiskBatches.filter((b) => b.owner_id === r.id).length} at risk
+                  </span>
+                  <span className="text-xs text-gray-400 capitalize">{r.shop_type}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

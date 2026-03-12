@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 font-sans antialiased;
+    font-feature-settings: "kern" 1, "liga" 1;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-xl border border-gray-100 shadow-sm;
+  }
+  .btn-primary {
+    @apply bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700
+           transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-white text-gray-700 border border-gray-200 px-4 py-2 rounded-lg font-medium
+           hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300;
+  }
+  .btn-ghost {
+    @apply text-gray-600 px-3 py-1.5 rounded-lg font-medium hover:bg-gray-100 transition-colors;
+  }
+  .input {
+    @apply w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none
+           focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-shadow
+           placeholder:text-gray-400;
+  }
+  .label {
+    @apply block text-sm font-medium text-gray-700 mb-1;
+  }
+  .select {
+    @apply w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none
+           focus:ring-2 focus:ring-primary-500 bg-white appearance-none cursor-pointer;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { @apply bg-gray-100 rounded; }
+::-webkit-scrollbar-thumb { @apply bg-gray-300 rounded hover:bg-gray-400; }
+
+/* Sidebar transition */
+.sidebar-enter { transform: translateX(-100%); }
+.sidebar-enter-active { transform: translateX(0); transition: transform 0.25s ease-out; }
