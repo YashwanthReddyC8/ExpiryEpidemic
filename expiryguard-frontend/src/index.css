@@ -59,3 +59,16 @@
   animation: scan-line 1.8s ease-in-out infinite;
   position: absolute;
 }
+
+/* Fix html5-qrcode double-image bug:
+   The library injects an anchor+img ("powered by" logo) and sometimes a
+   duplicate canvas that creates a second "picture" appearance. Hide them. */
+#barcode-scanner-viewport img,
+#barcode-scanner-viewport > a {
+  display: none !important;
+}
+/* Force the video to fill the container cleanly */
+#barcode-scanner-viewport video {
+  width: 100% !important;
+  border-radius: 0 !important;
+}

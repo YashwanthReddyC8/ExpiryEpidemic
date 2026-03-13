@@ -4,7 +4,7 @@
  * Props:
  *   onScan(text: string)  — called once per successful decode
  *   onClose()             — called when the user closes the scanner
- *   label                 — optional header label (default "Scan QR / Barcode")
+ *   label                 — optional header label
  */
 import { useEffect, useRef, useState } from 'react';
 import { Camera, CameraOff, X, Zap } from 'lucide-react';
@@ -18,7 +18,6 @@ export default function BarcodeScanner({ onScan, onClose, label = 'Scan QR / Bar
   const [lastScan, setLastScan] = useState('');
   const cooldown = useRef(false);
 
-  /* ── start scanner on mount ── */
   useEffect(() => {
     let instance = null;
 
@@ -29,16 +28,23 @@ export default function BarcodeScanner({ onScan, onClose, label = 'Scan QR / Bar
         scannerRef.current = instance;
 
         await instance.start(
-          { facingMode: 'environment' },         // rear camera
-          { fps: 12, qrbox: { width: 280, height: 180 } },
+          { facingMode: 'environment' },
+          {
+            fps: 12,
+            // qrbox controls the scanning region — no extra overlay from us needed
+            qrbox: { width: 260, height: 160 },
+            aspectRatio: 1.5,
+            // Disables the verbose shaded region so we only see 1 camera view
+            disableFlip: false,
+          },
           (decoded) => {
-            if (cooldown.current) return;        // debounce rapid fires
+            if (cooldown.current) return;
             cooldown.current = true;
             setLastScan(decoded);
             onScan(decoded);
             setTimeout(() => { cooldown.current = false; }, 1500);
           },
-          () => {}                               // ignore frame errors silently
+          () => {} // ignore per-frame errors
         );
 
         setStarted(true);
@@ -46,9 +52,9 @@ export default function BarcodeScanner({ onScan, onClose, label = 'Scan QR / Bar
       } catch (err) {
         const msg = String(err);
         if (msg.includes('permission') || msg.includes('NotAllowed')) {
-          setError('Camera access denied. Please allow camera permissions and try again.');
+          setError('Camera access denied. Please allow camera in browser settings.');
         } else {
-          setError('Could not start camera: ' + msg);
+          setError('Could not start camera. ' + msg);
         }
       }
     };
@@ -61,7 +67,7 @@ export default function BarcodeScanner({ onScan, onClose, label = 'Scan QR / Bar
         scannerRef.current = null;
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleClose = () => {
@@ -75,7 +81,7 @@ export default function BarcodeScanner({ onScan, onClose, label = 'Scan QR / Bar
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
-        
+
         {/* Header */}
         <div className="flex items-center justify-between bg-indigo-600 px-5 py-4">
           <div className="flex items-center gap-2 text-white">
@@ -90,44 +96,32 @@ export default function BarcodeScanner({ onScan, onClose, label = 'Scan QR / Bar
           </button>
         </div>
 
-        {/* Viewport */}
-        <div className="relative bg-black" style={{ minHeight: 280 }}>
-          <div id={SCANNER_ID} className="w-full" />
-
-          {/* Scanning overlay animation */}
-          {started && !error && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              {/* corner markers */}
-              <div className="relative" style={{ width: 280, height: 180 }}>
-                {/* top-left */}
-                <span className="absolute top-0 left-0  w-8 h-8 border-t-4 border-l-4 border-indigo-400 rounded-tl-md" />
-                {/* top-right */}
-                <span className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-400 rounded-tr-md" />
-                {/* bottom-left */}
-                <span className="absolute bottom-0 left-0  w-8 h-8 border-b-4 border-l-4 border-indigo-400 rounded-bl-md" />
-                {/* bottom-right */}
-                <span className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-400 rounded-br-md" />
-                {/* scan line */}
-                <div className="absolute left-0 right-0 h-0.5 bg-indigo-400 opacity-80 animate-scan-line" />
-              </div>
+        {/* Camera viewport — html5-qrcode injects the video + scanning box here */}
+        <div className="relative bg-black">
+          {/* Loading state — shown before camera starts */}
+          {!started && !error && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900 min-h-[240px]">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-400 border-t-transparent" />
+              <p className="mt-3 text-sm text-gray-400">Starting camera…</p>
             </div>
           )}
 
           {/* Error state */}
           {error && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 p-6 text-center">
+            <div className="flex flex-col items-center justify-center bg-gray-900 p-8 text-center min-h-[240px]">
               <CameraOff className="mb-3 h-12 w-12 text-red-400" />
               <p className="text-sm text-red-300">{error}</p>
             </div>
           )}
 
-          {/* Loading state */}
-          {!started && !error && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-400 border-t-transparent" />
-              <p className="mt-3 text-sm text-gray-400">Starting camera…</p>
-            </div>
-          )}
+          {/*
+            html5-qrcode renders the camera video + its own scanning box overlay
+            into this div. We keep it simple — no extra overlay divs on top.
+          */}
+          <div
+            id={SCANNER_ID}
+            className="w-full [&>video]:w-full [&>video]:rounded-none [&_img]:hidden"
+          />
         </div>
 
         {/* Footer */}
@@ -142,7 +136,7 @@ export default function BarcodeScanner({ onScan, onClose, label = 'Scan QR / Bar
             </div>
           ) : (
             <p className="text-center text-xs text-gray-400">
-              Point camera at any QR code or barcode
+              Point camera at a QR code or barcode
             </p>
           )}
           <button
