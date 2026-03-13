@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Search, ChevronLeft, ChevronRight, ArrowLeftRight, Tag, Gift, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { batchesApi } from '../api/batches';
+import { productsApi } from '../api/products';
 import { formatExpiryDate, getExpiryBg } from '../utils/expiry';
 import ExpiryBadge from '../components/shared/ExpiryBadge';
 import EmptyState from '../components/shared/EmptyState';
@@ -10,6 +11,7 @@ import SkeletonCard from '../components/shared/SkeletonCard';
 import AddBatchModal from '../components/AddBatchModal';
 import ReturnMemoModal from '../components/ReturnMemoModal';
 import DiscountModal from '../components/DiscountModal';
+import { useAuthStore } from '../store/authStore';
 
 const STATUS_OPTIONS = ['', 'active', 'expiring_soon', 'expired', 'returned', 'donated', 'discounted'];
 const STATUS_LABELS = { '': 'All statuses', active: 'Active', expiring_soon: 'Expiring Soon', expired: 'Expired', returned: 'Returned', donated: 'Donated', discounted: 'Discounted' };
@@ -23,7 +25,10 @@ const DAYS_PRESETS = [
 
 export default function Inventory() {
   const qc = useQueryClient();
-  const [filters, setFilters] = useState({ status: '', daysPreset: 0, search: '', page: 1 });
+  const { user } = useAuthStore();
+  const isShopkeeper = user?.role === 'shopkeeper';
+  const isDistributor = user?.role === 'distributor';
+  const [filters, setFilters] = useState({ status: '', productId: '', daysPreset: 0, search: '', page: 1 });
   const [addOpen, setAddOpen] = useState(false);
   const [addTab, setAddTab] = useState(0);
   const [returnBatch, setReturnBatch] = useState(null);
@@ -34,9 +39,12 @@ export default function Inventory() {
     page: filters.page,
     limit: 25,
     ...(filters.status && { status: filters.status }),
+    ...(filters.productId && { product_id: filters.productId }),
     ...(preset.daysMin !== undefined && { days_min: preset.daysMin }),
     ...(preset.daysMax !== undefined && { days_max: preset.daysMax }),
   };
+
+  const { data: products = [] } = useQuery({ queryKey: ['products'], queryFn: productsApi.list });
 
   const { data, isLoading } = useQuery({
     queryKey: ['batches', queryParams],
@@ -104,6 +112,17 @@ export default function Inventory() {
           onChange={(e) => setFilters({ ...filters, status: e.target.value, page: 1 })}
         >
           {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+        </select>
+
+        <select
+          className="select flex-shrink-0 w-52 py-1.5"
+          value={filters.productId}
+          onChange={(e) => setFilters({ ...filters, productId: e.target.value, page: 1 })}
+        >
+          <option value="">All products</option>
+          {products.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ''}</option>
+          ))}
         </select>
 
         <div className="flex rounded-lg border border-gray-200 overflow-hidden flex-shrink-0">
@@ -179,6 +198,7 @@ export default function Inventory() {
                           title="Generate Return Memo"
                           onClick={() => setReturnBatch(batch)}
                           className="p-1.5 rounded-md hover:bg-white hover:shadow-sm text-gray-500 hover:text-primary-600 transition-all"
+                          hidden={isDistributor}
                         >
                           <ArrowLeftRight size={14} />
                         </button>
@@ -186,6 +206,7 @@ export default function Inventory() {
                           title="Discount Suggestion"
                           onClick={() => setDiscountBatch(batch)}
                           className="p-1.5 rounded-md hover:bg-white hover:shadow-sm text-gray-500 hover:text-amber-600 transition-all"
+                          hidden={isShopkeeper}
                         >
                           <Tag size={14} />
                         </button>
@@ -245,8 +266,8 @@ export default function Inventory() {
 
       {/* Modals */}
       <AddBatchModal open={addOpen} onClose={() => setAddOpen(false)} initialTab={addTab} />
-      {returnBatch && <ReturnMemoModal batch={returnBatch} onClose={() => setReturnBatch(null)} />}
-      {discountBatch && <DiscountModal batch={discountBatch} onClose={() => setDiscountBatch(null)} />}
+      {!isDistributor && returnBatch && <ReturnMemoModal batch={returnBatch} onClose={() => setReturnBatch(null)} />}
+      {!isShopkeeper && discountBatch && <DiscountModal batch={discountBatch} onClose={() => setDiscountBatch(null)} />}
     </div>
   );
 }

@@ -18,7 +18,11 @@ export default function Sidebar({ onClose }) {
     { to: '/',             label: 'Dashboard',   Icon: LayoutGrid },
     { to: '/inventory',    label: 'Inventory',   Icon: Package },
     { to: '/products',     label: 'Products',    Icon: Tag },
-    { to: '/suppliers',    label: 'Suppliers',   Icon: Truck },
+    {
+      to: isDistributor ? '/retailers' : '/suppliers',
+      label: isDistributor ? 'Retailers' : 'Suppliers',
+      Icon: Truck,
+    },
     { to: '/alerts',       label: 'Alerts',      Icon: Bell,        badge: true },
     { to: '/billing',      label: 'Smart Checkout', Icon: ScanBarcode },
     ...(isDistributor ? [{ to: '/distributor', label: 'Network', Icon: Network }] : []),

@@ -25,4 +25,10 @@ class SupplierOut(SupplierBase):
     def from_mongo(cls, data: dict) -> "SupplierOut":
         if data and "_id" in data:
             data["id"] = str(data["_id"])
+        # Normalise: seed used owner_id, new records use user_id
+        if "user_id" not in data and "owner_id" in data:
+            data["user_id"] = data["owner_id"]
+        # Backward compatibility for older supplier rows created before created_at existed.
+        if "created_at" not in data:
+            data["created_at"] = datetime.utcnow()
         return cls(**data)

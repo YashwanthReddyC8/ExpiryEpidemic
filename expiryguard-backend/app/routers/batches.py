@@ -247,6 +247,12 @@ async def discount_suggestion(
     batch_id: str,
     current_user: UserOut = Depends(get_current_user),
 ) -> dict[str, Any]:
+    if current_user.role == "shopkeeper":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Discount workflow is disabled for shopkeepers",
+        )
+
     doc = await _batch_from_id(batch_id, current_user.id)
     batch = _normalize_batch(doc)
 

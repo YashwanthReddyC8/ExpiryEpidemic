@@ -145,6 +145,25 @@ def _confidence_field(value: Any, confidence: float) -> dict[str, Any]:
     return {"value": value, "confidence": round(confidence, 2)}
 
 
+def _extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    """Extract text from a PDF file without OCR rasterization."""
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="PDF support is not available: missing 'pypdf' dependency. Install backend requirements and restart server.",
+        ) from exc
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    chunks: list[str] = []
+    for page in reader.pages:
+        page_text = page.extract_text() or ""
+        if page_text.strip():
+            chunks.append(page_text)
+    return "\n\n".join(chunks).strip()
+
+
 # ── Invoice parsing ───────────────────────────────────────────
 
 def _parse_invoice_text(raw_text: str) -> list[dict[str, Any]]:
@@ -198,29 +217,49 @@ async def extract_invoice(
     image: UploadFile = File(...),
     current_user: UserOut = Depends(get_current_user),
 ) -> dict[str, Any]:
-    if not image.content_type or not image.content_type.startswith("image/"):
+    content_type = (image.content_type or "").lower()
+    filename = (image.filename or "").lower()
+    ext = os.path.splitext(filename)[1]
+    is_image_ext = ext in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
+    is_pdf_ext = ext == ".pdf"
+    is_image = content_type.startswith("image/") or is_image_ext
+    is_pdf = content_type == "application/pdf" or is_pdf_ext
+
+    if not (is_image or is_pdf):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only image files are accepted (image/*)",
+            detail="Only image files or PDFs are accepted (image/*, application/pdf)",
         )
 
     raw_bytes = await image.read()
     tmp_path: str | None = None
+    raw_text = ""
 
     try:
         t0 = time.monotonic()
 
-        # Write to a temp file so Tesseract can access it reliably
-        suffix = os.path.splitext(image.filename or "upload.jpg")[1] or ".jpg"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(raw_bytes)
-            tmp_path = tmp.name
+        if is_pdf:
+            raw_text = _extract_text_from_pdf(raw_bytes)
+            if not raw_text.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="PDF contains no extractable text. Upload a clear image/JPG/PNG for OCR.",
+                )
+        else:
+            # Write to a temp file so Tesseract can access it reliably.
+            suffix = os.path.splitext(image.filename or "upload.jpg")[1] or ".jpg"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(raw_bytes)
+                tmp_path = tmp.name
 
-        pil_image = Image.open(tmp_path)
-        raw_text: str = pytesseract.image_to_string(pil_image, config="--psm 6")
+            pil_image = Image.open(tmp_path)
+            raw_text = pytesseract.image_to_string(pil_image, config="--psm 6")
+
         items = _parse_invoice_text(raw_text)
         processing_ms = round((time.monotonic() - t0) * 1000)
 
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

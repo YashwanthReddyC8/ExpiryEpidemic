@@ -175,6 +175,12 @@ async def generate_return(
     body: GenerateReturnRequest,
     current_user: UserOut = Depends(get_current_user),
 ) -> dict[str, Any]:
+    if current_user.role != "shopkeeper":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Return is available only for shopkeepers",
+        )
+
     batches = get_collection("batches")
     batch = await batches.find_one(
         {"_id": ObjectId(body.batch_id), "user_id": current_user.id}
@@ -228,6 +234,12 @@ async def download_return_pdf(
     current_user: UserOut = Depends(get_current_user),
 ) -> FileResponse:
     """Serve the previously generated return PDF."""
+    if current_user.role != "shopkeeper":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Return is available only for shopkeepers",
+        )
+
     # Verify ownership
     batches = get_collection("batches")
     batch = await batches.find_one(

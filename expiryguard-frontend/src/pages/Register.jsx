@@ -16,7 +16,7 @@ export default function Register() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const [form, setForm] = useState({
     name: '', email: '', password: '', shop_name: '', shop_type: 'kirana',
-    phone: '', whatsapp_number: '', role: 'shop_owner',
+    phone: '', whatsapp_number: '', role: 'shopkeeper',
   });
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -92,7 +92,7 @@ export default function Register() {
               <div>
                 <label className="label">Role</label>
                 <select className="select" value={form.role} onChange={set('role')}>
-                  <option value="shop_owner">Shop Owner</option>
+                  <option value="shopkeeper">Shopkeeper</option>
                   <option value="distributor">Distributor</option>
                 </select>
               </div>

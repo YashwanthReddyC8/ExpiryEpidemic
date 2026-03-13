@@ -1,13 +1,30 @@
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class ProductBase(BaseModel):
     name: str
+    sku: str | None = None
     barcode: str | None = None
     category: str
     unit: str
     default_supplier_id: str | None = None
+
+    @field_validator("sku", mode="before")
+    @classmethod
+    def normalize_sku(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        sku = value.strip().upper()
+        return sku or None
+
+    @field_validator("barcode", mode="before")
+    @classmethod
+    def normalize_barcode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        barcode = "".join(str(value).strip().split()).upper()
+        return barcode or None
 
 
 class ProductCreate(ProductBase):

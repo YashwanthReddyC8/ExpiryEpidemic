@@ -98,28 +98,29 @@ async def seed():
     # --- Products ---
     products_to_insert = [
         # User 1
-        {"owner_id": owner_id, "name": "Paracetamol 500mg", "category": "medicine", "unit": "strip"},
-        {"owner_id": owner_id, "name": "Dolo 650", "category": "medicine", "unit": "strip"},
-        {"owner_id": owner_id, "name": "Dettol Antiseptic Liquid", "category": "healthcare", "unit": "bottle"},
-        {"owner_id": owner_id, "name": "Amul Butter 100g", "category": "dairy", "unit": "piece"},
-        {"owner_id": owner_id, "name": "Tata Salt 1kg", "category": "grocery", "unit": "packet"},
-        {"owner_id": owner_id, "name": "Disprin 10s", "category": "medicine", "unit": "strip"},
-        {"owner_id": owner_id, "name": "ORS Electral Powder", "category": "medicine", "unit": "packet"},
+        {"user_id": owner_id, "name": "Paracetamol 500mg", "sku": "PARA-500", "barcode": "8901234560012", "category": "medicine", "unit": "strip", "created_at": datetime.now(timezone.utc)},
+        {"user_id": owner_id, "name": "Dolo 650", "sku": "DOLO-650", "barcode": "8901234560013", "category": "medicine", "unit": "strip", "created_at": datetime.now(timezone.utc)},
+        {"user_id": owner_id, "name": "Dettol Antiseptic Liquid", "sku": "DETTOL-ANTI", "barcode": "8901234560014", "category": "healthcare", "unit": "bottle", "created_at": datetime.now(timezone.utc)},
+        {"user_id": owner_id, "name": "Amul Butter 100g", "sku": "AMUL-100G", "barcode": "8901234560015", "category": "dairy", "unit": "piece", "created_at": datetime.now(timezone.utc)},
+        {"user_id": owner_id, "name": "Tata Salt 1kg", "sku": "TATA-SALT-1KG", "barcode": "8901234560016", "category": "grocery", "unit": "packet", "created_at": datetime.now(timezone.utc)},
+        {"user_id": owner_id, "name": "Disprin 10s", "sku": "DISPRIN-10S", "barcode": "8901234560017", "category": "medicine", "unit": "strip", "created_at": datetime.now(timezone.utc)},
+        {"user_id": owner_id, "name": "ORS Electral Powder", "sku": "ORS-ELECTRAL", "barcode": "8901234560018", "category": "medicine", "unit": "packet", "created_at": datetime.now(timezone.utc)},
         # Customer 2
-        {"owner_id": c2_id, "name": "Maggi 2-Min Noodles", "category": "grocery", "unit": "packet"},
-        {"owner_id": c2_id, "name": "Aashirvaad Atta 5kg", "category": "grocery", "unit": "bag"},
-        {"owner_id": c2_id, "name": "Parle-G 100g", "category": "grocery", "unit": "packet"},
-        {"owner_id": c2_id, "name": "Horlicks 500g", "category": "fmcg", "unit": "jar"},
+        {"user_id": c2_id, "name": "Maggi 2-Min Noodles", "sku": "MAGGI-2MIN", "barcode": "8901234560021", "category": "grocery", "unit": "packet", "created_at": datetime.now(timezone.utc)},
+        {"user_id": c2_id, "name": "Aashirvaad Atta 5kg", "sku": "AASHIRVAAD-5KG", "barcode": "8901234560022", "category": "grocery", "unit": "bag", "created_at": datetime.now(timezone.utc)},
+        {"user_id": c2_id, "name": "Parle-G 100g", "sku": "PARLE-G-100G", "barcode": "8901234560023", "category": "grocery", "unit": "packet", "created_at": datetime.now(timezone.utc)},
+        {"user_id": c2_id, "name": "Horlicks 500g", "sku": "HORLICKS-500", "barcode": "8901234560024", "category": "fmcg", "unit": "jar", "created_at": datetime.now(timezone.utc)},
         # Distributor
-        {"owner_id": dist_id, "name": "Horlicks 500g (Wholesale)", "category": "fmcg", "unit": "box"},
-        {"owner_id": dist_id, "name": "Crocin Advance (Bulk)", "category": "medicine", "unit": "box"},
-        {"owner_id": dist_id, "name": "Vicks Vaporub 50g", "category": "healthcare", "unit": "jar"},
+        {"user_id": dist_id, "name": "Horlicks 500g (Wholesale)", "sku": "HOR-WHOLE-500", "barcode": "8901234560031", "category": "fmcg", "unit": "box", "created_at": datetime.now(timezone.utc)},
+        {"user_id": dist_id, "name": "Crocin Advance (Bulk)", "sku": "CROCIN-BULK", "barcode": "8901234560032", "category": "medicine", "unit": "box", "created_at": datetime.now(timezone.utc)},
+        {"user_id": dist_id, "name": "Vicks Vaporub 50g", "sku": "VICKS-50G", "barcode": "8901234560033", "category": "healthcare", "unit": "jar", "created_at": datetime.now(timezone.utc)},
     ]
     
     prod_ids = {} # owner_id_prod_name -> id
     for p in products_to_insert:
         r = await db.products.insert_one(p)
-        key = f"{p['owner_id']}_{p['name']}"
+        owner_key = p.get('user_id') or p.get('owner_id')
+        key = f"{owner_key}_{p['name']}"
         prod_ids[key] = str(r.inserted_id)
 
     # --- Batches ---

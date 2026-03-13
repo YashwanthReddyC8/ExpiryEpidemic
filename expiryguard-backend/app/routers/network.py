@@ -1,11 +1,12 @@
 """
 Network connection system:
-  Shop Owner  →  searches distributor by email
-            →  sends connect request
-  Distributor →  sees pending requests
-            →  accepts/rejects
+    Shopkeeper  →  searches distributor by email
+                         →  sends connect request
+    Distributor →  sees pending requests
+                         →  accepts/rejects
 
-On accept: distributor's _id is added to shop owner's distributor_network[]
+On accept: both users are linked in users.distributor_network[] and
+also mirrored in distributor_network collection for dashboard queries.
 """
 from datetime import datetime
 from typing import Any
@@ -47,7 +48,7 @@ async def search_user(
         "name":      doc.get("name", ""),
         "email":     doc.get("email", ""),
         "shop_name": doc.get("shop_name", ""),
-        "role":      doc.get("role", "shop_owner"),
+        "role":      doc.get("role", "shopkeeper"),
         "whatsapp":  doc.get("whatsapp_number", ""),
     }
 
@@ -65,11 +66,17 @@ async def send_connect_request(
     current_user: UserOut = Depends(get_current_user),
 ):
     """
-    Shop owner sends a connection request to a distributor (or vice versa).
+    Shopkeeper sends a connection request to a distributor.
     Creates a pending request document.
     """
     requests_col = get_collection("network_requests")
     users = get_collection("users")
+
+    if current_user.role != "shopkeeper":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only shopkeepers can send distributor connection requests",
+        )
 
     # Validate target exists
     try:
@@ -78,6 +85,12 @@ async def send_connect_request(
         raise HTTPException(status_code=400, detail="Invalid user ID")
     if not target:
         raise HTTPException(status_code=404, detail="Target user not found")
+
+    if target.get("role") != "distributor":
+        raise HTTPException(
+            status_code=400,
+            detail="You can only connect to distributor accounts",
+        )
 
     # Prevent duplicate pending requests
     existing = await requests_col.find_one({
@@ -137,7 +150,7 @@ async def list_requests(
     return results
 
 
-# ── List requests I SENT (for shop owners to see status) ───────
+# ── List requests I SENT (for shopkeepers to see status) ───────
 
 @router.get("/requests/sent")
 async def list_sent_requests(
@@ -179,6 +192,12 @@ async def handle_request(
     requests_col = get_collection("network_requests")
     users = get_collection("users")
 
+    if current_user.role != "distributor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only distributors can accept or reject requests",
+        )
+
     try:
         req = await requests_col.find_one({"_id": ObjectId(request_id)})
     except Exception:
@@ -201,6 +220,19 @@ async def handle_request(
             {"_id": ObjectId(req["from_id"])},
             {"$addToSet": {"distributor_network": req["to_id"]}}
         )
+        # Keep the network collection in sync for distributor dashboard queries.
+        network = get_collection("distributor_network")
+        existing_link = await network.find_one(
+            {"distributor_id": req["to_id"], "retailer_id": req["from_id"]}
+        )
+        if not existing_link:
+            await network.insert_one(
+                {
+                    "distributor_id": req["to_id"],
+                    "retailer_id": req["from_id"],
+                    "linked_at": datetime.utcnow(),
+                }
+            )
         await requests_col.update_one(
             {"_id": ObjectId(request_id)},
             {"$set": {"status": "accepted"}}

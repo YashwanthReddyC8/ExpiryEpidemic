@@ -40,6 +40,7 @@ export default function App() {
             <Route path="/inventory"     element={<Inventory />} />
             <Route path="/products"      element={<Products />} />
             <Route path="/suppliers"     element={<Suppliers />} />
+            <Route path="/retailers"     element={<Suppliers />} />
             <Route path="/alerts"        element={<Alerts />} />
             <Route path="/billing"       element={<Billing />} />
             <Route path="/settings"      element={<Settings />} />

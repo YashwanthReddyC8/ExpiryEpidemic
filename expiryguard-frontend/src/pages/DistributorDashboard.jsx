@@ -5,6 +5,8 @@ import { Users, Package, Truck, Copy, Calendar, CheckSquare, Square, ChevronDown
 import toast from 'react-hot-toast';
 import { dashboardApi } from '../api/dashboard';
 import { suppliersApi } from '../api/suppliers';
+import { stockRequestsApi } from '../api/stockRequests';
+import { productsApi } from '../api/products';
 import { useAuthStore } from '../store/authStore';
 import ExpiryBadge from '../components/shared/ExpiryBadge';
 import EmptyState from '../components/shared/EmptyState';
@@ -30,6 +32,11 @@ export default function DistributorDashboard() {
   const [selected, setSelected] = useState(new Set());
   const [pickupDate, setPickupDate] = useState('');
   const [retailersOpen, setRetailersOpen] = useState(true);
+  const [approveQty, setApproveQty] = useState({});
+  const [directShopkeeperId, setDirectShopkeeperId] = useState('');
+  const [directProductId, setDirectProductId] = useState('');
+  const [directQty, setDirectQty] = useState('');
+  const [directItems, setDirectItems] = useState([]);
 
   // Redirect non-distributors
   if (user?.role !== 'distributor') return <Navigate to="/" replace />;
@@ -44,6 +51,18 @@ export default function DistributorDashboard() {
     queryKey: ['retailers'],
     queryFn: suppliersApi.getRetailers,
   });
+  const { data: products = [] } = useQuery({
+    queryKey: ['products'],
+    queryFn: productsApi.list,
+  });
+
+  const { data: stockRequests = [] } = useQuery({
+    queryKey: ['stock-requests-incoming'],
+    queryFn: stockRequestsApi.listIncoming,
+    refetchInterval: 15000,
+  });
+  const pendingRequests = stockRequests.filter((r) => r.status === 'pending');
+  const approvedRequests = stockRequests.filter((r) => r.status === 'approved' || r.status === 'partially_approved');
 
   const pickupMutation = useMutation({
     mutationFn: () => suppliersApi.bulkPickup([...selected], pickupDate),
@@ -54,6 +73,105 @@ export default function DistributorDashboard() {
     },
     onError: () => toast.error('Pickup scheduling failed'),
   });
+
+  const approveRequestMutation = useMutation({
+    mutationFn: ({ requestId, qty }) => stockRequestsApi.approve(requestId, qty),
+    onSuccess: (res) => {
+      toast.success(`Request ${res.status.replace('_', ' ')} (${res.allocated_quantity}/${res.requested_quantity})`);
+      qc.invalidateQueries({ queryKey: ['stock-requests-incoming'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-distributor'] });
+    },
+    onError: (err) => toast.error(err?.response?.data?.detail || 'Approve failed'),
+  });
+
+  const rejectRequestMutation = useMutation({
+    mutationFn: (requestId) => stockRequestsApi.reject(requestId),
+    onSuccess: () => {
+      toast.success('Request rejected');
+      qc.invalidateQueries({ queryKey: ['stock-requests-incoming'] });
+    },
+    onError: () => toast.error('Reject failed'),
+  });
+
+  const downloadInvoice = async (requestId) => {
+    try {
+      const res = await stockRequestsApi.generateInvoice(requestId);
+      const blob = new Blob([JSON.stringify(res.invoice, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${res.invoice.invoice_no}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Invoice file downloaded');
+      qc.invalidateQueries({ queryKey: ['stock-requests-incoming'] });
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to generate invoice');
+    }
+  };
+
+  const addDirectItem = () => {
+    const qty = Number(directQty);
+    const product = products.find((p) => p.id === directProductId);
+    if (!product) {
+      toast.error('Select a product');
+      return;
+    }
+    if (!product.sku) {
+      toast.error('Selected product has no SKU');
+      return;
+    }
+    if (!qty || qty <= 0) {
+      toast.error('Enter valid quantity');
+      return;
+    }
+
+    setDirectItems((prev) => [...prev, {
+      supplier_sku: product.sku,
+      product_name: product.name,
+      quantity: qty,
+    }]);
+    setDirectProductId('');
+    setDirectQty('');
+  };
+
+  const generateDirectInvoice = async () => {
+    if (!directShopkeeperId) {
+      toast.error('Select a retailer');
+      return;
+    }
+    if (directItems.length === 0) {
+      toast.error('Add at least one item');
+      return;
+    }
+
+    try {
+      const res = await stockRequestsApi.generateDirectInvoice({
+        shopkeeper_id: directShopkeeperId,
+        items: directItems.map((i) => ({ supplier_sku: i.supplier_sku, quantity: i.quantity })),
+      });
+
+      const pdfResponse = await stockRequestsApi.downloadDirectInvoicePdf(res.invoice.invoice_id);
+      const blob = new Blob([pdfResponse.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${res.invoice.invoice_no}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      toast.success('Direct invoice generated and downloaded');
+      setDirectItems([]);
+      setDirectShopkeeperId('');
+      qc.invalidateQueries({ queryKey: ['batches'] });
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to generate direct invoice');
+    }
+  };
 
   const atRiskBatches = distData?.at_risk_batches ?? [];
   const pendingPickups = atRiskBatches.filter((b) => b.status === 'pickup_scheduled').length;
@@ -101,6 +219,111 @@ export default function DistributorDashboard() {
             <Copy size={14} /> Copy
           </button>
         </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-700">Generate direct supplier invoice (no request)</h2>
+        <p className="text-xs text-gray-500">Use this when retailer confirms products/qty by call. Download JSON invoice and share it for shop upload.</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <select className="select" value={directShopkeeperId} onChange={(e) => setDirectShopkeeperId(e.target.value)}>
+            <option value="">Select retailer</option>
+            {retailers.map((r) => <option key={r.id} value={r.id}>{r.shop_name || r.name}</option>)}
+          </select>
+          <select className="select" value={directProductId} onChange={(e) => setDirectProductId(e.target.value)}>
+            <option value="">Select product</option>
+            {products.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ''}</option>)}
+          </select>
+          <div className="flex gap-2">
+            <input className="input" type="number" min="1" placeholder="Qty" value={directQty} onChange={(e) => setDirectQty(e.target.value)} />
+            <button className="btn-secondary" onClick={addDirectItem}>Add</button>
+          </div>
+        </div>
+
+        {directItems.length > 0 && (
+          <div className="rounded-lg border border-gray-100">
+            {directItems.map((item, idx) => (
+              <div key={`${item.supplier_sku}-${idx}`} className="px-3 py-2 text-xs border-b border-gray-100 last:border-b-0 flex items-center justify-between">
+                <span>{item.product_name} ({item.supplier_sku})</span>
+                <span>Qty: {item.quantity}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button className="btn-primary" onClick={generateDirectInvoice}>Generate Direct Invoice File</button>
+      </div>
+
+      {/* At-risk batch table */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-gray-700">Stock requests from shopkeepers</h2>
+          <span className="text-xs text-gray-400">{pendingRequests.length} pending</span>
+        </div>
+        {pendingRequests.length === 0 ? (
+          <div className="px-5 py-6 text-sm text-gray-400">No pending stock requests.</div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {pendingRequests.map((req) => (
+              <div key={req.id} className="px-5 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{req.product_name} ({req.supplier_sku})</p>
+                  <p className="text-xs text-gray-500">{req.shop_name} · {req.shopkeeper_name}</p>
+                  <p className="text-xs text-gray-500">Requested: {req.requested_quantity} · Available: {req.available_quantity}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max={req.requested_quantity}
+                    className="input w-24"
+                    value={approveQty[req.id] ?? req.requested_quantity}
+                    onChange={(e) => setApproveQty((prev) => ({ ...prev, [req.id]: Number(e.target.value) }))}
+                  />
+                  <button
+                    className="btn-primary"
+                    onClick={() => approveRequestMutation.mutate({ requestId: req.id, qty: approveQty[req.id] ?? req.requested_quantity })}
+                    disabled={approveRequestMutation.isPending}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => rejectRequestMutation.mutate(req.id)}
+                    disabled={rejectRequestMutation.isPending}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-gray-700">Approved requests (ready to invoice)</h2>
+          <span className="text-xs text-gray-400">{approvedRequests.length} approved</span>
+        </div>
+        {approvedRequests.length === 0 ? (
+          <div className="px-5 py-6 text-sm text-gray-400">No approved requests yet.</div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {approvedRequests.map((req) => (
+              <div key={req.id} className="px-5 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{req.product_name} ({req.supplier_sku})</p>
+                  <p className="text-xs text-gray-500">{req.shop_name} · {req.shopkeeper_name}</p>
+                  <p className="text-xs text-gray-500">Allocated: {req.allocated_quantity} · Unit price: Rs {req.quoted_unit_price ?? 0}</p>
+                </div>
+                <button className="btn-secondary" onClick={() => downloadInvoice(req.id)}>
+                  Generate Invoice File
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* At-risk batch table */}

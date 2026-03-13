@@ -20,7 +20,10 @@ async def list_suppliers(
     current_user: UserOut = Depends(get_current_user),
 ) -> list[SupplierOut]:
     suppliers = get_collection("suppliers")
-    cursor = suppliers.find({"user_id": current_user.id}).sort("name", 1)
+    # Support both field names (older seed uses owner_id, new records use user_id)
+    cursor = suppliers.find({
+        "$or": [{"user_id": current_user.id}, {"owner_id": current_user.id}]
+    }).sort("name", 1)
     return [SupplierOut.from_mongo(doc) async for doc in cursor]
 
 
@@ -81,10 +84,10 @@ async def link_distributor(
     current_user: UserOut = Depends(get_current_user),
 ) -> dict[str, bool]:
     """Shop owner links themselves to a distributor."""
-    if current_user.role != "shop_owner":
+    if current_user.role != "shopkeeper":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only shop owners can link to a distributor",
+            detail="Only shopkeepers can link to a distributor",
         )
 
     # Verify the distributor exists
@@ -121,13 +124,28 @@ async def get_linked_retailers(
     """Return all retailers linked to the authenticated distributor."""
     network = get_collection("distributor_network")
     links = await network.find({"distributor_id": distributor.id}).to_list(length=None)
-    retailer_ids = [ObjectId(link["retailer_id"]) for link in links]
+    retailer_ids = {link["retailer_id"] for link in links if link.get("retailer_id")}
+
+    # Backward compatibility: older accepted requests were stored only on users.distributor_network.
+    for retailer_id in distributor.distributor_network:
+        if retailer_id:
+            retailer_ids.add(retailer_id)
 
     if not retailer_ids:
         return []
 
     users = get_collection("users")
-    cursor = users.find({"_id": {"$in": retailer_ids}})
+    object_ids: list[ObjectId] = []
+    for retailer_id in retailer_ids:
+        try:
+            object_ids.append(ObjectId(retailer_id))
+        except Exception:
+            continue
+
+    if not object_ids:
+        return []
+
+    cursor = users.find({"_id": {"$in": object_ids}})
     return [UserOut.from_mongo(doc) async for doc in cursor]
 
 

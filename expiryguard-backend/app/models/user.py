@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 from bson import ObjectId
 
 
@@ -11,9 +11,17 @@ class UserBase(BaseModel):
     shop_name: str
     shop_type: Literal["kirana", "medical", "fmcg"]
     whatsapp_number: str | None = None
-    role: Literal["shop_owner", "distributor"] = "shop_owner"
+    role: Literal["shopkeeper", "shop_owner", "distributor"] = "shopkeeper"
     alert_prefs: dict | None = None
     distributor_network: list[str] = Field(default_factory=list)
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def normalize_role(cls, value: str) -> str:
+        # Backward compatibility for older clients/data that use "shop_owner".
+        if value == "shop_owner":
+            return "shopkeeper"
+        return value
 
 class UserUpdate(BaseModel):
     name: str | None = None
