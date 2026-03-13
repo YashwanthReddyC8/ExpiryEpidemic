@@ -3,9 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Shield, ShieldCheck, Package, ArrowLeft, CheckCircle2, XCircle,
   CreditCard, Receipt, Clock, ScanBarcode, User, Banknote, QrCode,
-  Smartphone, Activity, LayoutDashboard,
+  Smartphone, Activity, LayoutDashboard, Camera,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import BarcodeScanner from '../components/BarcodeScanner';
 import {
   getSessions, getSessionItems, verifySession, paySession,
   rejectSession, updatePaymentMethod,
@@ -183,8 +184,9 @@ function SessionDetail({ session, items, onBack, onVerify, onPay, onReject, onPa
 export default function Billing() {
   const qc = useQueryClient();
   const [selectedId, setSelectedId] = useState(null);
-  const [scanInput, setScanInput] = useState('');
-  const [tab, setTab] = useState('overview');
+  const [scanInput, setScanInput]   = useState('');
+  const [tab, setTab]               = useState('overview');
+  const [showScanner, setShowScanner] = useState(false);  // camera modal
 
   const { data: sessions = [], isLoading } = useQuery({
     queryKey: ['billing_sessions'],
@@ -217,17 +219,23 @@ export default function Billing() {
 
   const handleScanQR = (e) => {
     e.preventDefault();
-    const input = scanInput.trim().toUpperCase();
-    if (!input) return;
-    const found = sessions.find((s) => s.session_code === input || s.id === input);
+    lookupSession(scanInput.trim().toUpperCase());
+  };
+
+  const lookupSession = (code) => {
+    if (!code) return;
+    const found = sessions.find((s) => s.session_code === code || s.id === code);
     if (found && found.state === 'LOCKED') {
       setSelectedId(found.id);
       setTab('overview');
       setScanInput('');
+      setShowScanner(false);
     } else if (found) {
       toast.error(`Session is already ${found.state}`);
+      setShowScanner(false);
     } else {
       toast.error('Session not found');
+      setShowScanner(false);
     }
   };
 
@@ -304,22 +312,32 @@ export default function Billing() {
             <h3 className="mb-3 flex items-center gap-2 font-semibold text-gray-900">
               <ScanBarcode className="h-5 w-5 text-indigo-600" /> Quick Lookup
             </h3>
-            <form onSubmit={handleScanQR} className="flex gap-3 max-w-md">
-              <input
-                type="text"
-                placeholder="Session code (e.g. QL-9A2X)..."
-                value={scanInput}
-                onChange={(e) => setScanInput(e.target.value)}
-                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm uppercase shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
+            <div className="flex gap-3 max-w-lg">
+              <form onSubmit={handleScanQR} className="flex flex-1 gap-2">
+                <input
+                  type="text"
+                  placeholder="Session code (e.g. QL-9A2X)..."
+                  value={scanInput}
+                  onChange={(e) => setScanInput(e.target.value)}
+                  className="flex-1 rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm uppercase shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <Btn
+                  type="submit"
+                  disabled={!scanInput.trim()}
+                  className="bg-indigo-600 text-white hover:bg-indigo-700 px-4"
+                >
+                  Lookup
+                </Btn>
+              </form>
               <Btn
-                type="submit"
-                disabled={!scanInput.trim()}
-                className="bg-indigo-600 text-white hover:bg-indigo-700 px-5"
+                type="button"
+                onClick={() => setShowScanner(true)}
+                className="bg-gray-100 text-gray-700 hover:bg-gray-200 gap-1.5"
+                title="Open camera scanner"
               >
-                Lookup
+                <Camera className="h-4 w-4" /> Camera
               </Btn>
-            </form>
+            </div>
           </div>
 
           {/* Session cards */}
@@ -377,39 +395,59 @@ export default function Billing() {
 
       {/* ── Scanner Tab ── */}
       {tab === 'scanner' && (
-        <div className="mx-auto max-w-xl rounded-xl border bg-white p-8 shadow-sm space-y-6">
-          <div className="text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-50">
-              <QrCode className="h-8 w-8 text-indigo-600" />
+        <div className="mx-auto max-w-xl space-y-6">
+          {/* Camera-first card */}
+          <div
+            onClick={() => setShowScanner(true)}
+            className="group cursor-pointer rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50 p-10 text-center transition-all hover:border-indigo-400 hover:bg-indigo-100 active:scale-95"
+          >
+            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-white shadow-md group-hover:shadow-lg transition-shadow">
+              <Camera className="h-10 w-10 text-indigo-600" />
             </div>
-            <h2 className="text-xl font-bold text-gray-900">Verify Customer Cart</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Ask the customer for their session code or QR code and enter it below.
+            <h2 className="text-xl font-bold text-gray-900">Open Camera Scanner</h2>
+            <p className="mt-2 text-sm text-gray-500">
+              Point your camera at the customer's QR code or barcode to instantly pull up their cart.
             </p>
+            <span className="mt-4 inline-block rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white group-hover:bg-indigo-700 transition-colors">
+              Tap to Start Camera
+            </span>
           </div>
 
-          <form onSubmit={handleScanQR} className="space-y-3">
-            <input
-              type="text"
-              autoFocus
-              placeholder="Session Code (e.g. QL-9A2X) ..."
-              value={scanInput}
-              onChange={(e) => setScanInput(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-4 py-3 font-mono text-lg uppercase tracking-widest shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-            <Btn
-              type="submit"
-              disabled={!scanInput.trim()}
-              className="w-full bg-indigo-600 text-white hover:bg-indigo-700 py-3 text-base"
-            >
-              <ScanBarcode className="mr-2 h-5 w-5" /> Scan & Open Cart
-            </Btn>
-          </form>
-
-          <div className="border-t pt-4 text-center text-xs text-gray-400">
-            Sessions refresh every 5 seconds. Verified sessions auto-show payment button.
+          {/* Manual fallback */}
+          <div className="rounded-xl border bg-white p-6 shadow-sm">
+            <h3 className="mb-3 text-sm font-semibold text-gray-500 uppercase tracking-wide">Or enter manually</h3>
+            <form onSubmit={handleScanQR} className="flex gap-2">
+              <input
+                type="text"
+                autoFocus
+                placeholder="Session Code (e.g. QL-9A2X)..."
+                value={scanInput}
+                onChange={(e) => setScanInput(e.target.value)}
+                className="flex-1 rounded-lg border border-gray-300 px-4 py-3 font-mono text-base uppercase tracking-widest shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+              <Btn
+                type="submit"
+                disabled={!scanInput.trim()}
+                className="bg-indigo-600 text-white hover:bg-indigo-700 px-5"
+              >
+                <ScanBarcode className="h-5 w-5" />
+              </Btn>
+            </form>
           </div>
+
+          <p className="text-center text-xs text-gray-400">
+            Live sessions refresh every 5 seconds automatically.
+          </p>
         </div>
+      )}
+
+      {/* ── Camera Scanner Modal ── */}
+      {showScanner && (
+        <BarcodeScanner
+          label="Scan Customer QR / Session Code"
+          onScan={(text) => lookupSession(text.trim().toUpperCase())}
+          onClose={() => setShowScanner(false)}
+        />
       )}
     </div>
   );
