@@ -105,6 +105,17 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
     onError: (err) => toast.error(err.response?.data?.detail ?? 'Failed to add batch'),
   });
 
+  const requestMutation = useMutation({
+    mutationFn: stockRequestsApi.create,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['stock-requests-mine'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      toast.success('Stock request sent. Inventory will update after distributor approval and invoice import.');
+      onSuccess();
+    },
+    onError: (err) => toast.error(err?.response?.data?.detail ?? 'Failed to send stock request'),
+  });
+
   const set = (field) => (e) => setForm({ ...form, [field]: e.target.value });
 
   useEffect(() => {
@@ -125,6 +136,16 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
     }));
   };
 
+  const handleShopkeeperSupplierChange = (e) => {
+    const distributorId = e.target.value;
+    const selected = connectedDistributors.find((d) => d.to_id === distributorId);
+    setForm((prev) => ({
+      ...prev,
+      distributor_id: distributorId,
+      supplier_name: selected?.to_name ?? '',
+    }));
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     const selected = (products ?? []).find((p) => p.id === form.product_id);
@@ -134,6 +155,24 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
     }
 
     const selectedDistributor = connectedDistributors.find((d) => d.to_id === form.distributor_id);
+
+    if (isShopkeeper) {
+      if (!form.distributor_id) {
+        toast.error('Please select a connected distributor');
+        return;
+      }
+      if (!selected?.sku) {
+        toast.error('Selected product has no SKU; cannot send supplier request');
+        return;
+      }
+
+      requestMutation.mutate({
+        distributor_id: form.distributor_id,
+        supplier_sku: selected.sku,
+        quantity: Number(form.quantity),
+      });
+      return;
+    }
 
     mutation.mutate({
       ...form,
@@ -167,13 +206,37 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
         </div>
         {isShopkeeper ? (
           <div className="col-span-2">
-            <label className="label">Supplier *</label>
-            <select className="select" required value={form.supplier_name} onChange={set('supplier_name')}>
-              <option value="">Select supplier</option>
-              {(suppliers ?? []).map((s) => (
-                <option key={s.id} value={s.name}>{s.name}</option>
+            <label className="label">Connected Distributor *</label>
+            <select className="select" required value={form.distributor_id} onChange={handleShopkeeperSupplierChange}>
+              <option value="">Select connected distributor</option>
+              {connectedDistributors.map((d) => (
+                <option key={d.id} value={d.to_id}>
+                  {d.to_name}{d.to_email ? ` (${d.to_email})` : ''}
+                </option>
               ))}
             </select>
+            {connectedDistributors.length === 0 && (
+              <p className="mt-1 text-xs text-amber-600">No accepted distributor connections found. Connect from the Suppliers page first.</p>
+            )}
+            {quoteData && (
+              <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 space-y-1">
+                <p>
+                  Unit price: <span className="font-semibold">Rs {Number(quoteData.quoted_unit_price ?? 0).toFixed(2)}</span>
+                  {Number(quoteData.discount_pct ?? 0) > 0 && (
+                    <>
+                      {' '}| Discount: <span className="font-semibold">{quoteData.discount_pct}%</span>
+                    </>
+                  )}
+                </p>
+                <p>
+                  After discount: <span className="font-semibold">Rs {Number(quoteData.discounted_unit_price ?? quoteData.quoted_unit_price ?? 0).toFixed(2)}</span>
+                  {' '}| Estimated total: <span className="font-semibold">Rs {(Number(form.quantity || 0) * Number(quoteData.discounted_unit_price ?? quoteData.quoted_unit_price ?? 0)).toFixed(2)}</span>
+                </p>
+                <p>
+                  Available stock: <span className="font-semibold">{quoteData.available_quantity}</span>
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           <>
@@ -203,8 +266,14 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
           </>
         )}
       </div>
-      <button type="submit" disabled={mutation.isPending} className="btn-primary w-full mt-2">
-        {mutation.isPending ? 'Adding…' : 'Add Batch'}
+      <button
+        type="submit"
+        disabled={isShopkeeper ? requestMutation.isPending : mutation.isPending}
+        className="btn-primary w-full mt-2"
+      >
+        {isShopkeeper
+          ? (requestMutation.isPending ? 'Sending request…' : 'Request From Supplier')
+          : (mutation.isPending ? 'Adding…' : 'Add Batch')}
       </button>
     </form>
   );

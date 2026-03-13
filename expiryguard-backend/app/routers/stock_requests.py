@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 import json
 import logging
 import os
@@ -106,6 +106,19 @@ class DirectInvoiceItem(BaseModel):
 class DirectInvoiceCreate(BaseModel):
     shopkeeper_id: str
     items: list[DirectInvoiceItem]
+
+
+def _discount_pct_for_days(days_left: int) -> int:
+    # Keep aligned with inventory discount guidance.
+    if days_left <= 0:
+        return 50
+    if days_left <= 7:
+        return 40
+    if days_left <= 15:
+        return 25
+    if days_left <= 30:
+        return 10
+    return 0
 
 
 class DirectInvoiceImportBody(BaseModel):
@@ -228,6 +241,84 @@ async def _import_direct_invoice_document(
     return {"ok": True, "inserted_batches": inserted, "invoice_id": invoice_id}
 
 
+async def _fulfill_request_to_shop_inventory(
+    req: dict[str, Any],
+    allocations: list[dict[str, Any]],
+    now: datetime,
+) -> int:
+    """Create/append shopkeeper batches from approved request allocations."""
+    products = get_collection("products")
+    batches = get_collection("batches")
+
+    shopkeeper_id = req.get("shopkeeper_id")
+    if not shopkeeper_id:
+        return 0
+
+    sku = str(req.get("supplier_sku", "")).strip().upper()
+    product_name = req.get("product_name", "")
+    shop_product = await products.find_one(
+        {"user_id": shopkeeper_id, "sku": {"$regex": f"^{sku}$", "$options": "i"}}
+    )
+    if not shop_product:
+        result = await products.insert_one(
+            {
+                "user_id": shopkeeper_id,
+                "name": product_name,
+                "sku": sku,
+                "barcode": None,
+                "category": "General",
+                "unit": "pcs",
+                "default_supplier_id": req.get("distributor_id"),
+                "created_at": now,
+            }
+        )
+        product_id = str(result.inserted_id)
+    else:
+        product_id = str(shop_product.get("_id"))
+
+    req_id = str(req.get("_id", ""))
+    suffix = req_id[-6:] if req_id else "REQ"
+    inserted = 0
+
+    for idx, line in enumerate(allocations, start=1):
+        qty = int(line.get("allocated_quantity", 0))
+        if qty <= 0:
+            continue
+
+        src_batch = line.get("source_batch_number") or f"REQ-{suffix}-{idx}"
+        expiry_val = line.get("expiry_date")
+        if isinstance(expiry_val, datetime):
+            expiry_dt = expiry_val
+        elif isinstance(expiry_val, str):
+            expiry_dt = datetime.fromisoformat(expiry_val.replace("Z", "+00:00"))
+        else:
+            expiry_dt = now
+        if expiry_dt.tzinfo is not None:
+            expiry_dt = expiry_dt.replace(tzinfo=None)
+
+        await batches.insert_one(
+            {
+                "user_id": shopkeeper_id,
+                "product_id": product_id,
+                "product_name": product_name,
+                "batch_number": f"{src_batch}-REQ-{suffix}-{idx}",
+                "expiry_date": expiry_dt,
+                "quantity": qty,
+                "purchase_date": now,
+                "purchase_price": float(line.get("purchase_price", req.get("approved_unit_price", 0))),
+                "supplier_id": req.get("distributor_id"),
+                "supplier_name": req.get("distributor_name"),
+                "status": BatchStatus.active,
+                "alert_stages_sent": [],
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        inserted += 1
+
+    return inserted
+
+
 @router.get("/quote")
 async def quote_stock_request(
     distributor_id: str,
@@ -266,11 +357,33 @@ async def quote_stock_request(
 
     available_quantity = sum(int(b.get("quantity", 0)) for b in source_batches)
     quoted_unit_price = float(source_batches[0].get("purchase_price", 0)) if source_batches else 0.0
+    discount_pct = 0
+    discounted_unit_price = quoted_unit_price
+
+    if source_batches:
+        first_expiry = source_batches[0].get("expiry_date")
+        expiry_date: date | None = None
+        if isinstance(first_expiry, datetime):
+            expiry_date = first_expiry.date()
+        elif isinstance(first_expiry, date):
+            expiry_date = first_expiry
+        elif isinstance(first_expiry, str):
+            try:
+                expiry_date = datetime.fromisoformat(first_expiry.replace("Z", "+00:00")).date()
+            except Exception:
+                expiry_date = None
+
+        if expiry_date:
+            days_left = (expiry_date - date.today()).days
+            discount_pct = _discount_pct_for_days(days_left)
+            discounted_unit_price = round(quoted_unit_price * (1 - (discount_pct / 100)), 2)
 
     return {
         "supplier_sku": sku,
         "product_name": source_product.get("name", ""),
         "quoted_unit_price": quoted_unit_price,
+        "discount_pct": discount_pct,
+        "discounted_unit_price": discounted_unit_price,
         "available_quantity": available_quantity,
     }
 
@@ -555,11 +668,13 @@ async def approve_request(
         "approved" if allocated_total >= requested_qty else "partially_approved"
     )
 
+    inserted_batches = await _fulfill_request_to_shop_inventory(req, allocations, now)
+
     await requests_col.update_one(
         {"_id": req_oid},
         {
             "$set": {
-                "status": new_status,
+                "status": "fulfilled",
                 "allocated_quantity": allocated_total,
                 "approved_unit_price": approved_unit_price,
                 "approved_total_value": round(approved_total_value, 2),
@@ -571,21 +686,23 @@ async def approve_request(
                     for a in allocations
                 ],
                 "updated_at": now,
-                "ready_for_invoice": True,
+                "ready_for_invoice": False,
                 "invoice_generated_at": None,
-                "invoice_imported_at": None,
+                "invoice_imported_at": now,
             }
         },
     )
 
     return {
         "ok": True,
-        "status": new_status,
+        "status": "fulfilled",
+        "approved_status": new_status,
         "allocated_quantity": allocated_total,
         "requested_quantity": requested_qty,
         "approved_unit_price": approved_unit_price,
         "approved_total_value": round(approved_total_value, 2),
         "allocations_count": len(allocations),
+        "inserted_batches": inserted_batches,
     }
 
 
@@ -604,7 +721,7 @@ async def generate_request_invoice(
     req = await requests_col.find_one({"_id": req_oid, "distributor_id": distributor.id})
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
-    if req.get("status") not in {"approved", "partially_approved"}:
+    if req.get("status") not in {"approved", "partially_approved", "fulfilled"}:
         raise HTTPException(status_code=409, detail="Only approved requests can generate invoice")
 
     now = datetime.utcnow()
@@ -663,7 +780,7 @@ async def generate_request_invoice_pdf(
     req = await requests_col.find_one({"_id": req_oid, "distributor_id": distributor.id})
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
-    if req.get("status") not in {"approved", "partially_approved"}:
+    if req.get("status") not in {"approved", "partially_approved", "fulfilled"}:
         raise HTTPException(status_code=409, detail="Only approved requests can generate invoice")
 
     now = datetime.utcnow()

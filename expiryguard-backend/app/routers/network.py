@@ -114,6 +114,8 @@ async def send_connect_request(
         "from_email": current_user.email,
         "to_id":     payload.target_user_id,
         "to_name":   target.get("name", ""),
+        "to_email":  target.get("email", ""),
+        "to_shop":   target.get("shop_name", ""),
         "message":   payload.message,
         "status":    "pending",
         "created_at": datetime.utcnow(),
@@ -158,13 +160,29 @@ async def list_sent_requests(
 ):
     """Returns all requests the current user has sent."""
     requests_col = get_collection("network_requests")
+    users = get_collection("users")
     cursor = requests_col.find({"from_id": current_user.id}).sort("created_at", -1)
     results = []
     async for doc in cursor:
+        to_email = doc.get("to_email", "")
+        to_shop = doc.get("to_shop", "")
+
+        # Backward compatibility for older network_requests documents.
+        if (not to_email or not to_shop) and doc.get("to_id"):
+            try:
+                target = await users.find_one({"_id": ObjectId(doc["to_id"])})
+            except Exception:
+                target = None
+            if target:
+                to_email = to_email or target.get("email", "")
+                to_shop = to_shop or target.get("shop_name", "")
+
         results.append({
             "id":       str(doc["_id"]),
             "to_id":    doc["to_id"],
             "to_name":  doc.get("to_name", ""),
+            "to_email": to_email,
+            "to_shop":  to_shop,
             "message":  doc.get("message", ""),
             "status":   doc["status"],
             "created_at": doc["created_at"].isoformat() if doc.get("created_at") else "",

@@ -134,6 +134,16 @@ export default function Settings() {
           <Save size={15} /> {savingPrefs ? 'Saving…' : 'Save preferences'}
         </button>
       </div>
+      {/* WhatsApp */}
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-gray-700 mb-3">WhatsApp</h2>
+        <button
+          onClick={() => window.open('https://wa.me/14155238886?text=join%20place-window', '_blank')}
+          className="join place-window btn-primary text-sm font-medium"
+        >
+          activate whatsapp
+        </button>
+      </div>
 
       {/* Danger */}
       <div className="card p-5 border border-red-100">

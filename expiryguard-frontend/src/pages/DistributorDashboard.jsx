@@ -80,6 +80,8 @@ export default function DistributorDashboard() {
       toast.success(`Request ${res.status.replace('_', ' ')} (${res.allocated_quantity}/${res.requested_quantity})`);
       qc.invalidateQueries({ queryKey: ['stock-requests-incoming'] });
       qc.invalidateQueries({ queryKey: ['dashboard-distributor'] });
+      qc.invalidateQueries({ queryKey: ['batches'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
     },
     onError: (err) => toast.error(err?.response?.data?.detail || 'Approve failed'),
   });
@@ -115,6 +117,9 @@ export default function DistributorDashboard() {
       URL.revokeObjectURL(url);
       toast.success('Request approved & invoice PDF downloaded');
       qc.invalidateQueries({ queryKey: ['stock-requests-incoming'] });
+      qc.invalidateQueries({ queryKey: ['batches'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-distributor'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to generate invoice');
     }
@@ -236,7 +241,11 @@ export default function DistributorDashboard() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <select className="select" value={directShopkeeperId} onChange={(e) => setDirectShopkeeperId(e.target.value)}>
             <option value="">Select retailer</option>
-            {retailers.map((r) => <option key={r.id} value={r.id}>{r.shop_name || r.name}</option>)}
+            {retailers.map((r) => (
+              <option key={r.id} value={r.id}>
+                {(r.shop_name || r.name)}{r.email ? ` (${r.email})` : ''}
+              </option>
+            ))}
           </select>
           <select className="select" value={directProductId} onChange={(e) => setDirectProductId(e.target.value)}>
             <option value="">Select product</option>
