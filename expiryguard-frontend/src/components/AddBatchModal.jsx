@@ -133,12 +133,6 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
       return;
     }
 
-    if (isShopkeeper) {
-      toast('Upload distributor invoice JSON to add stock in shopkeeper inventory.');
-      onOpenInvoiceTab();
-      return;
-    }
-
     const selectedDistributor = connectedDistributors.find((d) => d.to_id === form.distributor_id);
 
     mutation.mutate({
@@ -146,9 +140,12 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
       product_id: selected.id,
       product_name: selected.name,
       supplier_id: isShopkeeper ? form.distributor_id || undefined : undefined,
-      supplier_name: isShopkeeper ? (selectedDistributor?.to_name || '') : (isDistributor ? '' : form.supplier_name),
+      supplier_name: isShopkeeper ? (form.supplier_name || '') : (isDistributor ? '' : form.supplier_name),
       quantity: Number(form.quantity),
-      purchase_price: Number(form.purchase_price),
+      purchase_price: isShopkeeper ? 0 : Number(form.purchase_price),
+      batch_number: isShopkeeper ? undefined : form.batch_number,
+      purchase_date: isShopkeeper ? new Date().toISOString().split('T')[0] : form.purchase_date,
+      expiry_date: isShopkeeper ? '2099-12-31' : form.expiry_date,
     });
   };
 
@@ -168,7 +165,17 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
           <label className="label">Quantity *</label>
           <input type="number" className="input" required min="1" placeholder="100" value={form.quantity} onChange={set('quantity')} />
         </div>
-        {!isShopkeeper && (
+        {isShopkeeper ? (
+          <div className="col-span-2">
+            <label className="label">Supplier *</label>
+            <select className="select" required value={form.supplier_name} onChange={set('supplier_name')}>
+              <option value="">Select supplier</option>
+              {(suppliers ?? []).map((s) => (
+                <option key={s.id} value={s.name}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+        ) : (
           <>
             <div>
               <label className="label">Batch number</label>
@@ -186,42 +193,19 @@ function ManualTab({ onSuccess, prefillName, onOpenInvoiceTab }) {
               <label className="label">Purchase date</label>
               <input type="date" className="input" value={form.purchase_date} onChange={set('purchase_date')} />
             </div>
+            {!isDistributor && (
+              <div>
+                <label className="label">Supplier / Distributor</label>
+                <input list="supplier-list" className="input" placeholder="Ravi Traders" value={form.supplier_name} onChange={set('supplier_name')} />
+                <datalist id="supplier-list">{(suppliers ?? []).map((s) => <option key={s.id} value={s.name} />)}</datalist>
+              </div>
+            )}
           </>
         )}
-        {isShopkeeper && (
-          <div className="col-span-2">
-            <label className="label">Distributor *</label>
-            <select className="select" required value={form.distributor_id} onChange={set('distributor_id')}>
-              <option value="">Select connected distributor</option>
-              {connectedDistributors.map((d) => (
-                <option key={d.id} value={d.to_id}>{d.to_name}</option>
-              ))}
-            </select>
-            {quoteData && (
-              <p className="mt-1 text-xs text-gray-500">
-                Unit price: <span className="font-semibold text-gray-700">Rs {quoteData.quoted_unit_price}</span>
-                {' '}| Available: <span className="font-semibold text-gray-700">{quoteData.available_quantity}</span>
-              </p>
-            )}
-          </div>
-        )}
-        {!isDistributor && !isShopkeeper && (
-          <div>
-            <label className="label">Supplier / Distributor</label>
-            <input list="supplier-list" className="input" placeholder="Ravi Traders" value={form.supplier_name} onChange={set('supplier_name')} />
-            <datalist id="supplier-list">{(suppliers ?? []).map((s) => <option key={s.id} value={s.name} />)}</datalist>
-          </div>
-        )}
       </div>
-      {isShopkeeper ? (
-        <button type="button" onClick={onOpenInvoiceTab} className="btn-primary w-full mt-2">
-          Continue with Upload Invoice
-        </button>
-      ) : (
-        <button type="submit" disabled={mutation.isPending} className="btn-primary w-full mt-2">
-          {mutation.isPending ? 'Adding…' : 'Add Batch'}
-        </button>
-      )}
+      <button type="submit" disabled={mutation.isPending} className="btn-primary w-full mt-2">
+        {mutation.isPending ? 'Adding…' : 'Add Batch'}
+      </button>
     </form>
   );
 }
@@ -316,8 +300,32 @@ function BarcodeTab({ onFilled, onImportSuccess, onOpenInvoiceTab }) {
         setShowQuickAdd(false);
         setResult(data);
         if (lastLookupRef.current !== `${trimmedCode}:direct_invoice`) {
-          toast('Invoice barcode detected. You can import it directly from here.');
+          toast('Invoice barcode detected. Importing into your shop inventory...');
           lastLookupRef.current = `${trimmedCode}:direct_invoice`;
+        }
+        if (isShopkeeper && data.found) {
+          const invoiceNo = extractDirectInvoiceCode(data?.invoice_no || data?.barcode || trimmedCode || '');
+          if (invoiceNo) {
+            setImportingInvoice(true);
+            try {
+              const imported = await stockRequestsApi.importDirectInvoiceByCode(invoiceNo);
+              qc.invalidateQueries({ queryKey: ['batches'] });
+              qc.invalidateQueries({ queryKey: ['dashboard'] });
+              qc.invalidateQueries({ queryKey: ['stock-requests-mine'] });
+              toast.success(`Imported ${imported.inserted_batches} batch(es) from invoice ${invoiceNo}`);
+              onImportSuccess();
+              return;
+            } catch (err) {
+              // If already imported, treat as non-fatal and keep invoice card visible.
+              if (err?.response?.status === 409) {
+                toast('Invoice already imported');
+              } else {
+                toast.error(err?.response?.data?.detail || 'Invoice import failed');
+              }
+            } finally {
+              setImportingInvoice(false);
+            }
+          }
         }
         return;
       }

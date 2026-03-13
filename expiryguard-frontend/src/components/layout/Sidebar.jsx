@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  LayoutGrid, Package, Tag, Truck, Bell, Settings, LogOut, ShieldCheck, Network, ScanBarcode,
+  LayoutGrid, Package, Tag, Truck, Bell, Settings, LogOut, ShieldCheck, Network, ScanBarcode, ArrowLeftRight,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAuthStore } from '../../store/authStore';
@@ -25,6 +25,7 @@ export default function Sidebar({ onClose }) {
     },
     { to: '/alerts',       label: 'Alerts',      Icon: Bell,        badge: true },
     { to: '/billing',      label: 'Smart Checkout', Icon: ScanBarcode },
+    { to: '/transactions', label: 'Transactions',    Icon: ArrowLeftRight },
     ...(isDistributor ? [{ to: '/distributor', label: 'Network', Icon: Network }] : []),
     { to: '/settings',     label: 'Settings',    Icon: Settings },
   ];

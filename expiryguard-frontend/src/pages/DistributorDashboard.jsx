@@ -93,19 +93,27 @@ export default function DistributorDashboard() {
     onError: () => toast.error('Reject failed'),
   });
 
-  const downloadInvoice = async (requestId) => {
+  const downloadInvoice = async (requestId, qty) => {
     try {
-      const res = await stockRequestsApi.generateInvoice(requestId);
-      const blob = new Blob([JSON.stringify(res.invoice, null, 2)], { type: 'application/json' });
+      // Auto-approve with given quantity; skip if already approved (409)
+      try {
+        await stockRequestsApi.approve(requestId, qty ?? null);
+      } catch (approveErr) {
+        if (approveErr?.response?.status !== 409) throw approveErr;
+      }
+      const res = await stockRequestsApi.generateInvoicePdf(requestId);
+      const invoiceNo = res.headers?.['content-disposition']?.match(/filename="?([^"]+)"?/)?.[1]
+        || `EG-REQ-invoice.pdf`;
+      const blob = new Blob([res.data], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${res.invoice.invoice_no}.json`;
+      a.download = invoiceNo;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      toast.success('Invoice file downloaded');
+      toast.success('Request approved & invoice PDF downloaded');
       qc.invalidateQueries({ queryKey: ['stock-requests-incoming'] });
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to generate invoice');
@@ -282,10 +290,10 @@ export default function DistributorDashboard() {
                   />
                   <button
                     className="btn-primary"
-                    onClick={() => approveRequestMutation.mutate({ requestId: req.id, qty: approveQty[req.id] ?? req.requested_quantity })}
+                    onClick={() => downloadInvoice(req.id, approveQty[req.id] ?? req.requested_quantity)}
                     disabled={approveRequestMutation.isPending}
                   >
-                    Approve
+                    Generate Invoice
                   </button>
                   <button
                     className="btn-secondary"

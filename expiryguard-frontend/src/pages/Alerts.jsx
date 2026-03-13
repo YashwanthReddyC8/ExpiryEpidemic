@@ -60,6 +60,16 @@ export default function Alerts() {
     },
   });
 
+  const testWhatsapp = useMutation({
+    mutationFn: alertsApi.testWhatsapp,
+    onSuccess: (d) => {
+      toast.success(d?.detail || 'WhatsApp test message sent');
+    },
+    onError: (err) => {
+      toast.error(err?.response?.data?.detail || 'Failed to send WhatsApp test message');
+    },
+  });
+
   const items = data?.items ?? [];
   const unread = data?.unread_count ?? 0;
   const groups = groupByDate(items);
@@ -79,11 +89,21 @@ export default function Alerts() {
             </p>
           )}
         </div>
-        {unread > 0 && (
-          <button onClick={() => markAll.mutate()} disabled={markAll.isPending} className="btn-secondary flex items-center gap-1.5 text-sm">
-            <CheckCheck size={15} /> Mark all read
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => testWhatsapp.mutate()}
+            disabled={testWhatsapp.isPending}
+            className="btn-secondary flex items-center gap-1.5 text-sm"
+            title="Send a test WhatsApp alert"
+          >
+            {testWhatsapp.isPending ? 'Sending...' : 'Test WhatsApp'}
           </button>
-        )}
+          {unread > 0 && (
+            <button onClick={() => markAll.mutate()} disabled={markAll.isPending} className="btn-secondary flex items-center gap-1.5 text-sm">
+              <CheckCheck size={15} /> Mark all read
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filter pills */}

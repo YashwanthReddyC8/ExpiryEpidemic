@@ -32,7 +32,17 @@ def _normalize_direct_invoice_code(raw_code: str) -> str | None:
     elif code.startswith("DIR"):
         code = "EG-DIR-" + code[len("DIR"):]
 
-    return code if _DIRECT_INVOICE_RE.fullmatch(code) else None
+    if _DIRECT_INVOICE_RE.fullmatch(code):
+        return code
+
+    # Be tolerant of noisy scanner payloads that contain the invoice code as a substring.
+    match = re.search(r"(?:EG[-_]?DIR[-_]?|DIR[-_]?)([A-Z0-9]{6,})", _normalize_code(raw_code))
+    if match:
+        candidate = f"EG-DIR-{match.group(1)}"
+        if _DIRECT_INVOICE_RE.fullmatch(candidate):
+            return candidate
+
+    return None
 
 
 def _alternate_codes(code: str) -> list[str]:

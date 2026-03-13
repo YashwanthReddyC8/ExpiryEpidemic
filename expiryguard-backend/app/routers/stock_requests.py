@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import logging
 import os
 import re
 import tempfile
@@ -16,6 +17,7 @@ from app.models.batch import BatchStatus
 from app.models.user import UserOut
 
 router = APIRouter(prefix="/stock-requests", tags=["stock-requests"])
+logger = logging.getLogger(__name__)
 
 _PDF_DIR = os.path.join(tempfile.gettempdir(), "expiryguard_direct_invoices")
 os.makedirs(_PDF_DIR, exist_ok=True)
@@ -128,7 +130,17 @@ def _normalize_direct_invoice_code(raw_code: str) -> str | None:
     elif code.startswith("DIR"):
         code = "EG-DIR-" + code[len("DIR"):]
 
-    return code if _DIRECT_INVOICE_RE.fullmatch(code) else None
+    if _DIRECT_INVOICE_RE.fullmatch(code):
+        return code
+
+    # Be tolerant of noisy scanner payloads that contain the invoice code as a substring.
+    match = re.search(r"(?:EG[-_]?DIR[-_]?|DIR[-_]?)([A-Z0-9]{6,})", "".join((raw_code or "").strip().split()).upper())
+    if match:
+        candidate = f"EG-DIR-{match.group(1)}"
+        if _DIRECT_INVOICE_RE.fullmatch(candidate):
+            return candidate
+
+    return None
 
 
 async def _import_direct_invoice_document(
@@ -630,6 +642,91 @@ async def generate_request_invoice(
     return {"invoice": invoice}
 
 
+@router.get("/{request_id}/invoice/pdf")
+async def generate_request_invoice_pdf(
+    request_id: str,
+    distributor: UserOut = Depends(get_distributor_user),
+) -> FileResponse:
+    from reportlab.graphics.barcode import code128
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    requests_col = get_collection("stock_requests")
+    try:
+        req_oid = ObjectId(request_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request ID")
+
+    req = await requests_col.find_one({"_id": req_oid, "distributor_id": distributor.id})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.get("status") not in {"approved", "partially_approved"}:
+        raise HTTPException(status_code=409, detail="Only approved requests can generate invoice")
+
+    now = datetime.utcnow()
+    invoice_no = f"EG-REQ-{str(req_oid)[-8:].upper()}"
+    distributor_label = distributor.shop_name or distributor.name or ""
+    shop_label = req.get("shop_name") or req.get("shopkeeper_name") or ""
+    product_name = req.get("product_name", "")
+    supplier_sku = req.get("supplier_sku", "")
+    allocated_qty = req.get("allocated_quantity", 0)
+    unit_price = req.get("approved_unit_price", req.get("quoted_unit_price", 0)) or 0
+    total_value = req.get("approved_total_value", round(float(allocated_qty) * float(unit_price), 2))
+
+    os.makedirs(_PDF_DIR, exist_ok=True)
+    pdf_path = os.path.join(_PDF_DIR, f"{invoice_no}.pdf")
+
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph(f"<b>Stock Request Invoice</b> - {invoice_no}", styles["Title"]))
+    elements.append(Spacer(1, 0.2 * cm))
+    elements.append(Paragraph(f"Generated: {now.strftime('%d %b %Y %H:%M UTC')}", styles["Normal"]))
+    elements.append(Paragraph(f"Distributor: {distributor_label}", styles["Normal"]))
+    elements.append(Paragraph(f"Shop: {shop_label}", styles["Normal"]))
+    elements.append(Spacer(1, 0.4 * cm))
+
+    table_data = [["Product", "SKU", "Quantity", "Unit Price", "Total"]]
+    table_data.append([product_name, supplier_sku, str(allocated_qty), f"Rs {unit_price}", f"Rs {total_value}"])
+    table_data.append(["", "", "", "Grand Total", f"Rs {total_value}"])
+
+    table = Table(table_data, colWidths=[6 * cm, 3 * cm, 2.5 * cm, 3 * cm, 3 * cm])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f3f4f6")),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 0.6 * cm))
+
+    barcode_widget = code128.Code128(invoice_no, barHeight=1.2 * cm, barWidth=0.55)
+    elements.append(Paragraph("Invoice Barcode", styles["Heading4"]))
+    elements.append(barcode_widget)
+    elements.append(Spacer(1, 0.2 * cm))
+    elements.append(Paragraph(invoice_no, styles["Normal"]))
+
+    doc.build(elements)
+
+    await requests_col.update_one(
+        {"_id": req_oid},
+        {"$set": {"invoice_generated_at": now, "updated_at": now}},
+    )
+
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"{invoice_no}.pdf",
+    )
+
+
 @router.post("/import-invoice")
 async def import_invoice_to_shop(
     file: UploadFile = File(...),
@@ -760,16 +857,39 @@ async def import_direct_invoice_by_code(
     payload: DirectInvoiceImportBody,
     current_user: UserOut = Depends(get_current_user),
 ) -> dict[str, Any]:
+    logger.info(
+        "import-direct-invoice request received: raw=%s user_id=%s role=%s",
+        payload.invoice_no,
+        current_user.id,
+        current_user.role,
+    )
     if current_user.role != "shopkeeper":
         raise HTTPException(status_code=403, detail="Only shopkeepers can import invoices")
 
     invoice_no = _normalize_direct_invoice_code(payload.invoice_no)
     if not invoice_no:
+        logger.warning(
+            "import-direct-invoice invalid code: raw=%s normalized=None user_id=%s",
+            payload.invoice_no,
+            current_user.id,
+        )
         raise HTTPException(status_code=400, detail="Invalid direct invoice code")
+
+    logger.info(
+        "import-direct-invoice normalized code: invoice_no=%s user_id=%s",
+        invoice_no,
+        current_user.id,
+    )
 
     direct_invoices = get_collection("direct_invoices")
     invoice_doc = await direct_invoices.find_one({"invoice_no": invoice_no})
     if invoice_doc and invoice_doc.get("shopkeeper_id") != current_user.id:
+        logger.warning(
+            "import-direct-invoice ownership mismatch by invoice_no: invoice_no=%s owner_shopkeeper_id=%s user_id=%s",
+            invoice_no,
+            invoice_doc.get("shopkeeper_id"),
+            current_user.id,
+        )
         raise HTTPException(status_code=403, detail="Invoice does not belong to this shop")
 
     if not invoice_doc:
@@ -782,10 +902,29 @@ async def import_direct_invoice_by_code(
                 break
 
     if invoice_doc and invoice_doc.get("shopkeeper_id") != current_user.id:
+        logger.warning(
+            "import-direct-invoice ownership mismatch by suffix: invoice_no=%s owner_shopkeeper_id=%s user_id=%s",
+            invoice_no,
+            invoice_doc.get("shopkeeper_id"),
+            current_user.id,
+        )
         raise HTTPException(status_code=403, detail="Invoice does not belong to this shop")
 
     if not invoice_doc:
+        logger.warning(
+            "import-direct-invoice not found: invoice_no=%s user_id=%s",
+            invoice_no,
+            current_user.id,
+        )
         raise HTTPException(status_code=404, detail="Direct invoice not found")
+
+    logger.info(
+        "import-direct-invoice match found: invoice_no=%s invoice_id=%s shopkeeper_id=%s user_id=%s",
+        invoice_no,
+        str(invoice_doc.get("_id")),
+        invoice_doc.get("shopkeeper_id"),
+        current_user.id,
+    )
 
     return await _import_direct_invoice_document(invoice_doc, current_user)
 

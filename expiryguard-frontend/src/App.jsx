@@ -13,6 +13,7 @@ import Settings         from './pages/Settings';
 import DistributorDashboard from './pages/DistributorDashboard';
 import InviteAccept     from './pages/InviteAccept';
 import Billing from './pages/Billing';
+import Transactions from './pages/Transactions';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -43,6 +44,7 @@ export default function App() {
             <Route path="/retailers"     element={<Suppliers />} />
             <Route path="/alerts"        element={<Alerts />} />
             <Route path="/billing"       element={<Billing />} />
+            <Route path="/transactions"  element={<Transactions />} />
             <Route path="/settings"      element={<Settings />} />
             <Route path="/distributor"   element={<DistributorDashboard />} />
           </Route>

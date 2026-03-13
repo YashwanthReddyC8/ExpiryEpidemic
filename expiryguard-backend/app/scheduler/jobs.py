@@ -8,6 +8,7 @@ Runs at 08:00 every day via APScheduler.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 # Alert thresholds: (days_threshold, AlertType)
 _THRESHOLDS: list[tuple[int, AlertType]] = [
@@ -83,7 +85,7 @@ def _expired_message(batch: dict) -> str:
 
 # ── WhatsApp (Twilio) ─────────────────────────────────────────
 
-async def send_whatsapp_alert(user: dict, message: str) -> bool:
+async def send_whatsapp_alert(user: dict, message: str, raise_on_error: bool = False) -> bool:
     """
     Send a WhatsApp message via Twilio.
     Returns True on success, False on any failure.
@@ -127,10 +129,20 @@ async def send_whatsapp_alert(user: dict, message: str) -> bool:
     except ImportError:
         logger.warning("twilio package not installed; skipping WhatsApp send")
         print("WA Failed: Twilio package missing")
+        if raise_on_error:
+            raise
         return False
     except Exception as exc:
-        logger.warning("WhatsApp send failed: %s", exc)
-        print("WA Exception:", str(exc))
+        exc_text = _ANSI_RE.sub("", str(exc or "")).strip()
+        code = getattr(exc, "code", None)
+        if code:
+            logger.warning("WhatsApp send failed (Twilio %s): %s", code, exc_text)
+            print(f"WA Exception (Twilio {code}):", exc_text)
+        else:
+            logger.warning("WhatsApp send failed: %s", exc_text)
+            print("WA Exception:", exc_text)
+        if raise_on_error:
+            raise
         return False
 
 

@@ -14,6 +14,8 @@ export const stockRequestsApi = {
   reject: (requestId, reason = '') =>
     api.post(`/stock-requests/${requestId}/reject`, { reason }).then((r) => r.data),
   generateInvoice: (requestId) => api.get(`/stock-requests/${requestId}/invoice`).then((r) => r.data),
+  generateInvoicePdf: (requestId) =>
+    api.get(`/stock-requests/${requestId}/invoice/pdf`, { responseType: 'blob' }),
   importInvoice: (file) => {
     const form = new FormData();
     form.append('file', file);
