@@ -10,6 +10,7 @@ from app.database import close_connection, create_indexes
 from app.routers.alerts import router as alerts_router
 from app.routers.barcode import router as barcode_router
 from app.routers.batches import router as batches_router
+from app.routers.billing import router as billing_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.ocr import router as ocr_router
 from app.routers.products import router as products_router
@@ -61,6 +62,7 @@ app.include_router(ocr_router)
 app.include_router(barcode_router)
 app.include_router(returns_router)
 app.include_router(users_router)
+app.include_router(billing_router)
 
 
 # ── Health ─────────────────────────────────────────────────────
