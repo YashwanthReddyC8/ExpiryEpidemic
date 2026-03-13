@@ -17,6 +17,7 @@ from app.routers.products import router as products_router
 from app.routers.returns import router as returns_router
 from app.routers.suppliers import router as suppliers_router
 from app.routers.users import router as users_router
+from app.routers.network import router as network_router
 from app.scheduler.jobs import run_expiry_alerts, start_scheduler, stop_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -63,6 +64,7 @@ app.include_router(barcode_router)
 app.include_router(returns_router)
 app.include_router(users_router)
 app.include_router(billing_router)
+app.include_router(network_router)
 
 
 # ── Health ─────────────────────────────────────────────────────

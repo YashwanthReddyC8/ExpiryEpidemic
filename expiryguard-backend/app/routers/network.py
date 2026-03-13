@@ -1,0 +1,217 @@
+"""
+Network connection system:
+  Shop Owner  →  searches distributor by email
+            →  sends connect request
+  Distributor →  sees pending requests
+            →  accepts/rejects
+
+On accept: distributor's _id is added to shop owner's distributor_network[]
+"""
+from datetime import datetime
+from typing import Any
+
+from bson import ObjectId
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+
+from app.auth.dependencies import get_current_user
+from app.database import get_collection
+from app.models.user import UserOut
+
+router = APIRouter(prefix="/network", tags=["network"])
+
+
+# ── Search a registered user by email ─────────────────────────
+
+@router.get("/search")
+async def search_user(
+    email: str,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Search for a registered ExpiryGuard user by email.
+    Returns public profile info (no sensitive data).
+    """
+    users = get_collection("users")
+    doc = await users.find_one(
+        {"email": email.strip().lower()},
+        {"password_hash": 0}   # never return the hash
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="No user found with that email")
+    if str(doc["_id"]) == current_user.id:
+        raise HTTPException(status_code=400, detail="That's your own account!")
+
+    return {
+        "id":        str(doc["_id"]),
+        "name":      doc.get("name", ""),
+        "email":     doc.get("email", ""),
+        "shop_name": doc.get("shop_name", ""),
+        "role":      doc.get("role", "shop_owner"),
+        "whatsapp":  doc.get("whatsapp_number", ""),
+    }
+
+
+# ── Send a connection request ──────────────────────────────────
+
+class ConnectRequest(BaseModel):
+    target_user_id: str
+    message: str = ""
+
+
+@router.post("/connect", status_code=201)
+async def send_connect_request(
+    payload: ConnectRequest,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Shop owner sends a connection request to a distributor (or vice versa).
+    Creates a pending request document.
+    """
+    requests_col = get_collection("network_requests")
+    users = get_collection("users")
+
+    # Validate target exists
+    try:
+        target = await users.find_one({"_id": ObjectId(payload.target_user_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    if not target:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    # Prevent duplicate pending requests
+    existing = await requests_col.find_one({
+        "from_id":  current_user.id,
+        "to_id":    payload.target_user_id,
+        "status":   "pending"
+    })
+    if existing:
+        raise HTTPException(status_code=409, detail="Connection request already sent")
+
+    # Also check if already connected
+    from_doc = await users.find_one({"_id": ObjectId(current_user.id)})
+    network = from_doc.get("distributor_network", [])
+    if payload.target_user_id in network:
+        raise HTTPException(status_code=409, detail="Already connected")
+
+    doc = {
+        "from_id":   current_user.id,
+        "from_name": current_user.name,
+        "from_shop": current_user.shop_name or "",
+        "from_email": current_user.email,
+        "to_id":     payload.target_user_id,
+        "to_name":   target.get("name", ""),
+        "message":   payload.message,
+        "status":    "pending",
+        "created_at": datetime.utcnow(),
+    }
+    result = await requests_col.insert_one(doc)
+    doc["id"] = str(result.inserted_id)
+    return {"ok": True, "request_id": doc["id"], "to_name": target.get("name")}
+
+
+# ── List requests (for current user as recipient) ──────────────
+
+@router.get("/requests")
+async def list_requests(
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Returns all pending connection requests sent TO the current user.
+    (Distributors use this to see who wants to link.)
+    """
+    requests_col = get_collection("network_requests")
+    cursor = requests_col.find({"to_id": current_user.id}).sort("created_at", -1)
+    results = []
+    async for doc in cursor:
+        results.append({
+            "id":         str(doc["_id"]),
+            "from_id":    doc["from_id"],
+            "from_name":  doc.get("from_name", ""),
+            "from_shop":  doc.get("from_shop", ""),
+            "from_email": doc.get("from_email", ""),
+            "message":    doc.get("message", ""),
+            "status":     doc["status"],
+            "created_at": doc["created_at"].isoformat() if doc.get("created_at") else "",
+        })
+    return results
+
+
+# ── List requests I SENT (for shop owners to see status) ───────
+
+@router.get("/requests/sent")
+async def list_sent_requests(
+    current_user: UserOut = Depends(get_current_user),
+):
+    """Returns all requests the current user has sent."""
+    requests_col = get_collection("network_requests")
+    cursor = requests_col.find({"from_id": current_user.id}).sort("created_at", -1)
+    results = []
+    async for doc in cursor:
+        results.append({
+            "id":       str(doc["_id"]),
+            "to_id":    doc["to_id"],
+            "to_name":  doc.get("to_name", ""),
+            "message":  doc.get("message", ""),
+            "status":   doc["status"],
+            "created_at": doc["created_at"].isoformat() if doc.get("created_at") else "",
+        })
+    return results
+
+
+# ── Accept / Reject ────────────────────────────────────────────
+
+class RequestAction(BaseModel):
+    action: str   # "accept" or "reject"
+
+
+@router.post("/requests/{request_id}")
+async def handle_request(
+    request_id: str,
+    payload: RequestAction,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Accept or reject a connection request.
+    On accept: adds the sender's id into the current user's distributor_network[]
+    AND adds current user's id into the sender's distributor_network[].
+    """
+    requests_col = get_collection("network_requests")
+    users = get_collection("users")
+
+    try:
+        req = await requests_col.find_one({"_id": ObjectId(request_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request ID")
+
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req["to_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your request")
+    if req["status"] != "pending":
+        raise HTTPException(status_code=409, detail=f"Request already {req['status']}")
+
+    if payload.action == "accept":
+        # Add each other to their distributor_network
+        await users.update_one(
+            {"_id": ObjectId(req["to_id"])},
+            {"$addToSet": {"distributor_network": req["from_id"]}}
+        )
+        await users.update_one(
+            {"_id": ObjectId(req["from_id"])},
+            {"$addToSet": {"distributor_network": req["to_id"]}}
+        )
+        await requests_col.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"status": "accepted"}}
+        )
+        return {"ok": True, "status": "accepted"}
+
+    elif payload.action == "reject":
+        await requests_col.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"status": "rejected"}}
+        )
+        return {"ok": True, "status": "rejected"}
+
+    raise HTTPException(status_code=400, detail="action must be 'accept' or 'reject'")
